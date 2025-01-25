@@ -54,7 +54,7 @@ void playbackWatchdog(void* infoIn) {
 		svcWaitSynchronization(*info->errInfo->failEvent, U64_MAX);
 		svcClearEvent(*info->errInfo->failEvent);
 
-		if (*info->errInfo->error === ERR_NONE) {
+		if (*info->errInfo->error == ERR_NONE) {
 			continue;
 		} else if (*info->errInfo->error == ERR_STOPPED) {
 			consoleSelect(info->screen);
@@ -136,20 +136,14 @@ static int cmpstringp(const void *p1, const void *p2) {
  * \return the number of entries.
  */
 static int getDir(struct dirList_t* dirList) {
-	char* wd = getcwd(NULL, 0);
-	int result = _getDir(wd, dirList);
-	free(wd);
-	return result;
-}
-
-static int _getDir(char* wd, struct dirList_t* dirList) {
-	DIR *dp;
-	struct dirent *ep;
-	int fileNum = 0;
-	int dirNum = 0;
+	DIR				*dp;
+	struct dirent	*ep;
+	int				fileNum = 0;
+	int				dirNum = 0;
+	char*			wd = getcwd(NULL, 0);
 
 	if (wd == NULL) {
-		return 0;
+		goto out;
 	}
 
 	/* Clear strings */
@@ -166,7 +160,7 @@ static int _getDir(char* wd, struct dirList_t* dirList) {
 	}
 
 	if ((dp = opendir(wd)) == NULL) {
-		return 0;
+		goto out;
 	}
 
 	while ((ep = readdir(dp)) != NULL) {
@@ -192,7 +186,10 @@ static int _getDir(char* wd, struct dirList_t* dirList) {
 
 	dirList->dirNum = dirNum;
 	dirList->fileNum = fileNum;
-	return dirNum + fileNum;
+
+	out:
+	free(wd);
+	return fileNum + dirNum;
 }
 
 /**
@@ -398,7 +395,7 @@ int main(int argc, char **argv) {
 			continue;
 		}
 
-		if (fileNum > 0 && (kDown & KEY_UP || (repeatKey && kHeld & KEY_UP))) {
+		if(fileNum > 0 && (kDown & KEY_UP || ((kHeld & KEY_UP) && repeatKey))) {
 			fileNum--;
 			/* 26 is the maximum number of entries that can be printed */
 			if (fileMax - fileNum + 2 > MAX_LIST && from > 0) {
@@ -409,7 +406,7 @@ int main(int argc, char **argv) {
 			}
 		}
 
-		if (fileNum > 0 && (kDown & KEY_DOWN || (repeatKey && kHeld & KEY_DOWN))) {
+		if (fileNum < fileMax && (kDown & KEY_DOWN || (repeatKey && kHeld & KEY_DOWN))) {
 			fileNum++;
 			if (
 				fileNum >= MAX_LIST 
@@ -541,7 +538,7 @@ int main(int argc, char **argv) {
 		}
 
 		/* After 1000ms, update playback time. */
-		if (osGetTime() - mill > 1000) {
+		while (osGetTime() - mill > 1000) {
 			unsigned hr, min, sec;
 			size_t seconds_played;
 			size_t seconds_total;
@@ -564,10 +561,11 @@ int main(int argc, char **argv) {
 			min = (seconds_total - (3600*hr))/60;
 			sec = (seconds_total -(3600*hr)-(min*60));
 			printf(" %02d:%02d:%02d", hr, min, sec);
+			break;
 		}
 	}
 
-out:
+	out:
 	puts("Exiting...");
 	runThreads = false;
 	svcSignalEvent(playbackFailEvent);
@@ -575,7 +573,7 @@ out:
 	gfxExit();
 	return 0;
 
-err:
+	err:
 	puts("A fatal error occurred. Press START to exit.");
 	while(true) {
 		u32 kDown;
