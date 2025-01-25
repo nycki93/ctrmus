@@ -13,26 +13,22 @@
 #define ctrmus_main_h
 
 /* Default folder */
-#define DEFAULT_DIR		"sdmc:/"
+#define DEFAULT_DIR "sdmc:/"
 
 /* Maximum number of lines that can be displayed */
-#define	MAX_LIST		28
+#define	MAX_LIST 28
 
-struct watchdogInfo
-{
-	PrintConsole*		screen;
-	struct errInfo_t*	errInfo;
+struct watchdogInfo {
+	PrintConsole* screen;
+	struct errInfo_t* errInfo;
 };
 
-struct dirList_t
-{
-	char**	files;
-	int		fileNum;
-
-	char**	directories;
-	int		dirNum;
-
-	char*	currentDir;
+struct dirList_t {
+	char** files;
+	int fileNum;
+	char** directories;
+	int dirNum;
+	char* currentDir;
 };
 
 /**

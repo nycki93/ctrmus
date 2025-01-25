@@ -21,59 +21,57 @@
 #include "main.h"
 #include "playback.h"
 
+#define ERR_NONE 0
+/* Used to signify that playback has stopped. Not technically an error. */
+#define ERR_STOPPED -1
+
 volatile bool runThreads = true;
 
 /**
  * Prints the current key mappings to stdio.
  */
-static void showControls(void)
-{
-	printf("Button mappings:\n"
-			"Pause: L+R or L+Up\n"
-			"Stop: L+B\n"
-			"A: Open File\n"
-			"B: Go up folder\n"
-			"Start: Exit\n"
-			"Browse: Up, Down, Left or Right\n");
+static void showControls(void) {
+	printf(
+		"Button mappings:\n"
+		"Pause: L+R or L+Up\n"
+		"Stop: L+B\n"
+		"A: Open File\n"
+		"B: Go up folder\n"
+		"Start: Exit\n"
+		"Browse: Up, Down, Left or Right\n"
+		"Play Prev/Next: ZL/ZR\n"
+	);
 }
 
 /**
- * Allows the playback thread to return any error messages that it may
- * encounter.
- *
- * \param	infoIn	Struct containing addresses of the event, the error code,
- *					and an optional error string.
+ * Allows the playback thread to return any error messages that it may encounter.
+ * \param infoIn Struct containing addresses of the event, the error code, and an optional error string.
  */
-void playbackWatchdog(void* infoIn)
-{
+void playbackWatchdog(void* infoIn) {
 	struct watchdogInfo* info = infoIn;
 
-	while(runThreads)
-	{
+	while(runThreads) {
 		svcWaitSynchronization(*info->errInfo->failEvent, U64_MAX);
 		svcClearEvent(*info->errInfo->failEvent);
 
-		if(*info->errInfo->error > 0)
-		{
+		if (*info->errInfo->error === ERR_NONE) {
+			continue;
+		} else if (*info->errInfo->error == ERR_STOPPED) {
 			consoleSelect(info->screen);
-			printf("Error %d: %s", *info->errInfo->error,
-					ctrmus_strerror(*info->errInfo->error));
+			puts("Stopped");
+		} else {
+			consoleSelect(info->screen);
+			printf(
+				"Error %d: %s", *info->errInfo->error,
+				ctrmus_strerror(*info->errInfo->error)
+			);
 
-			if(info->errInfo->errstr != NULL)
-			{
+			if (info->errInfo->errstr != NULL) {
 				printf(" %s", info->errInfo->errstr);
 				delete(info->errInfo->errstr);
 			}
 
 			printf("\n");
-		}
-		else if (*info->errInfo->error == -1)
-		{
-			/* Used to signify that playback has stopped.
-			 * Not technically an error.
-			 */
-			consoleSelect(info->screen);
-			puts("Stopped");
 		}
 	}
 
@@ -82,18 +80,14 @@ void playbackWatchdog(void* infoIn)
 
 /**
  * Stop the currently playing file (if there is one) and play another file.
- *
- * \param	ep_file			File to play.
- * \param	playbackInfo	Information that the playback thread requires to
- *							play file.
+ * \param ep_file File to play.
+ * \param playbackInfo Information that the playback thread requires to play file.
  */
-static int changeFile(const char* ep_file, struct playbackInfo_t* playbackInfo)
-{
+static int changeFile(const char* ep_file, struct playbackInfo_t* playbackInfo) {
 	s32 prio;
 	static Thread thread = NULL;
 
-	if(ep_file != NULL && getFileType(ep_file) == FILE_TYPE_ERROR)
-	{
+	if (ep_file != NULL && getFileType(ep_file) == FILE_TYPE_ERROR) {
 		*playbackInfo->errInfo->error = errno;
 		svcSignalEvent(*playbackInfo->errInfo->failEvent);
 		return -1;
@@ -103,8 +97,7 @@ static int changeFile(const char* ep_file, struct playbackInfo_t* playbackInfo)
 	 * If music is playing, stop it. Only one playback thread should be playing
 	 * at any time.
 	 */
-	if(thread != NULL)
-	{
+	if (thread) {
 		/* Tell the thread to stop playback before we join it */
 		stopPlayback();
 
@@ -113,8 +106,9 @@ static int changeFile(const char* ep_file, struct playbackInfo_t* playbackInfo)
 		thread = NULL;
 	}
 
-	if(ep_file == NULL || playbackInfo == NULL)
+	if (!ep_file || !playbackInfo) {
 		return 0;
+	}
 
 	playbackInfo->file = strdup(ep_file);
 	printf("Playing: %s\n", playbackInfo->file);
@@ -129,65 +123,68 @@ static int changeFile(const char* ep_file, struct playbackInfo_t* playbackInfo)
 	return 0;
 }
 
-static int cmpstringp(const void *p1, const void *p2)
-{
+static int cmpstringp(const void *p1, const void *p2) {
 	/* The actual arguments to this function are "pointers to
 	   pointers to char", but strcmp(3) arguments are "pointers
 	   to char", hence the following cast plus dereference */
-
 	return strcasecmp(* (char * const *) p1, * (char * const *) p2);
 }
 
 /**
- * Store the list of files and folders in current director to an array.
+ * Store the list of files and folders in current directory to an array.
+ * \param dir the directory to scan
+ * \return the number of entries.
  */
-static int getDir(struct dirList_t* dirList)
-{
-	DIR				*dp;
-	struct dirent	*ep;
-	int				fileNum = 0;
-	int				dirNum = 0;
-	char*			wd = getcwd(NULL, 0);
+static int getDir(struct dirList_t* dirList) {
+	char* wd = getcwd(NULL, 0);
+	int result = _getDir(wd, dirList);
+	free(wd);
+	return result;
+}
 
-	if(wd == NULL)
-		goto out;
+static int _getDir(char* wd, struct dirList_t* dirList) {
+	DIR *dp;
+	struct dirent *ep;
+	int fileNum = 0;
+	int dirNum = 0;
+
+	if (wd == NULL) {
+		return 0;
+	}
 
 	/* Clear strings */
-	for(int i = 0; i < dirList->dirNum; i++)
+	for (int i = 0; i < dirList->dirNum; i++) {
 		free(dirList->directories[i]);
-
-	for(int i = 0; i < dirList->fileNum; i++)
+	}
+	for (int i = 0; i < dirList->fileNum; i++) {
 		free(dirList->files[i]);
-
+	}
 	free(dirList->currentDir);
 
-	if((dirList->currentDir = strdup(wd)) == NULL)
+	if ((dirList->currentDir = strdup(wd)) == NULL) {
 		puts("Failure");
+	}
 
-	if((dp = opendir(wd)) == NULL)
-		goto out;
+	if ((dp = opendir(wd)) == NULL) {
+		return 0;
+	}
 
-	while((ep = readdir(dp)) != NULL)
-	{
-		if(ep->d_type == DT_DIR)
-		{
+	while ((ep = readdir(dp)) != NULL) {
+		if(ep->d_type == DT_DIR) {
 			/* Add more space for another pointer to a dirent struct */
 			dirList->directories = realloc(dirList->directories, (dirNum + 1) * sizeof(char*));
-
-			if((dirList->directories[dirNum] = strdup(ep->d_name)) == NULL)
+			if ((dirList->directories[dirNum] = strdup(ep->d_name)) == NULL) {
 				puts("Failure");
-
+			}
 			dirNum++;
-			continue;
+		} else {
+			/* Add more space for another pointer to a dirent struct */
+			dirList->files = realloc(dirList->files, (fileNum + 1) * sizeof(char*));
+			if ((dirList->files[fileNum] = strdup(ep->d_name)) == NULL) {
+				puts("Failure");
+			}
+			fileNum++;
 		}
-
-		/* Add more space for another pointer to a dirent struct */
-		dirList->files = realloc(dirList->files, (fileNum + 1) * sizeof(char*));
-
-		if((dirList->files[fileNum] = strdup(ep->d_name)) == NULL)
-			puts("Failure");
-
-		fileNum++;
 	}
 
 	qsort(&dirList->files[0], fileNum, sizeof(char *), cmpstringp);
@@ -195,66 +192,56 @@ static int getDir(struct dirList_t* dirList)
 
 	dirList->dirNum = dirNum;
 	dirList->fileNum = fileNum;
-
-	if(closedir(dp) != 0)
-		goto out;
-
-out:
-	free(wd);
-	return fileNum + dirNum;
+	return dirNum + fileNum;
 }
 
 /**
  * List current directory.
- *
- * \param	from	First entry in directory to list.
- * \param	max		Maximum number of entries to list. Must be > 0.
- * \param	select	File to show as selected. Must be > 0.
- * \return			Number of entries listed or negative on error.
+ * \param from First entry in directory to list.
+ * \param max Maximum number of entries to list. Must be > 0.
+ * \param selected File to show as selected. Must be > 0.
+ * \return Number of entries listed or negative on error.
  */
-static int listDir(int from, int max, int select, struct dirList_t dirList)
-{
-	int				fileNum = 0;
-	int				listed = 0;
+static int listDir(int from, int max, int selected, struct dirList_t dirList) {
+	int fileNum = 0;
+	int listed = 0;
 
 	printf("\033[0;0H");
 	printf("Dir: %.33s\n", dirList.currentDir);
 
-	if(from == 0)
-	{
-		printf("\33[2K%c../\n", select == 0 ? '>' : ' ');
-		listed++;
-		max--;
+	if (from == 0) {
+		printf("\33[2K%c../\n", selected == 0 ? '>' : ' ');
+		listed += 1;
+		max -= 1;
 	}
 
-	while(dirList.fileNum + dirList.dirNum > fileNum)
-	{
+	while (dirList.fileNum + dirList.dirNum > fileNum) {
 		fileNum++;
-
-		if(fileNum <= from)
+		if (fileNum <= from) {
 			continue;
+		}
 
 		listed++;
-
-		if(dirList.dirNum >= fileNum)
-		{
-			printf("\33[2K%c\x1b[34;1m%.37s/\x1b[0m\n",
-					select == fileNum ? '>' : ' ',
-					dirList.directories[fileNum - 1]);
-
+		if (dirList.dirNum >= fileNum) {
+			printf(
+				"\33[2K%c\x1b[34;1m%.37s/\x1b[0m\n",
+				selected == fileNum ? '>' : ' ',
+				dirList.directories[fileNum - 1]
+			);
 		}
 
 		/* fileNum must be referring to a file instead of a directory. */
-		if(dirList.dirNum < fileNum)
-		{
-			printf("\33[2K%c%.37s\n",
-					select == fileNum ? '>' : ' ',
-					dirList.files[fileNum - dirList.dirNum - 1]);
-
+		if (dirList.dirNum < fileNum) {
+			printf(
+				"\33[2K%c%.37s\n",
+				selected == fileNum ? '>' : ' ',
+				dirList.files[fileNum - dirList.dirNum - 1]
+			);
 		}
 
-		if(fileNum == max + from)
+		if (fileNum == max + from) {
 			break;
+		}
 	}
 
 	return listed;
@@ -262,45 +249,36 @@ static int listDir(int from, int max, int select, struct dirList_t dirList)
 
 /**
  * Get number of files in current working folder
- *
- * \return	Number of files in current working folder, -1 on failure with
- *			errno set.
+ * \return Number of files in current working folder, -1 on failure with errno set.
  */
-int getNumberFiles(void)
-{
-	DIR				*dp;
-	struct dirent	*ep;
-	int				ret = 0;
+int getNumberFiles(void) {
+	DIR *dp;
+	struct dirent *ep;
+	int result = 0;
 
-	if((dp = opendir(".")) == NULL)
-		goto err;
-
-	while((ep = readdir(dp)) != NULL)
-		ret++;
-
+	if ((dp = opendir(".")) == NULL) {
+		return -1;
+	}
+	while ((ep = readdir(dp)) != NULL) {
+		result += 1;
+	}
 	closedir(dp);
 
-out:
-	return ret;
-
-err:
-	ret = -1;
-	goto out;
+	return result;
 }
 
-int main(int argc, char **argv)
-{
-	PrintConsole	topScreenLog, topScreenInfo, bottomScreen;
-	int			fileMax;
-	int			fileNum = 0;
-	int			from = 0;
-	Thread			watchdogThread;
-	Handle			playbackFailEvent;
-	struct watchdogInfo	watchdogInfoIn;
-	struct errInfo_t	errInfo;
-	struct playbackInfo_t	playbackInfo = { 0 };
-	volatile int		error = 0;
-	struct dirList_t	dirList = { 0 };
+int main(int argc, char **argv) {
+	PrintConsole topScreenLog, topScreenInfo, bottomScreen;
+	int fileMax;
+	int fileNum = 0;
+	int from = 0;
+	Thread watchdogThread;
+	Handle playbackFailEvent;
+	struct watchdogInfo watchdogInfoIn;
+	struct errInfo_t errInfo;
+	struct playbackInfo_t playbackInfo = { 0 };
+	volatile int error = ERR_NONE;
+	struct dirList_t dirList = { 0 };
 
 	gfxInitDefault();
 	consoleInit(GFX_TOP, &topScreenLog);
@@ -320,8 +298,9 @@ int main(int argc, char **argv)
 
 	watchdogInfoIn.screen = &topScreenLog;
 	watchdogInfoIn.errInfo = &errInfo;
-	watchdogThread = threadCreate(playbackWatchdog,
-			&watchdogInfoIn, 4 * 1024, 0x20, -2, true);
+	watchdogThread = threadCreate(
+		playbackWatchdog, &watchdogInfoIn, 4 * 1024, 0x20, -2, true
+	);
 
 	playbackInfo.file = NULL;
 	playbackInfo.errInfo = &errInfo;
@@ -330,14 +309,12 @@ int main(int argc, char **argv)
 	chdir("MUSIC");
 
 	/* TODO: Not actually possible to get less than 0 */
-	if(getDir(&dirList) < 0)
-	{
+	if (getDir(&dirList) < 0) {
 		puts("Unable to obtain directory information");
 		goto err;
 	}
 
-	if(listDir(from, MAX_LIST, 0, dirList) < 0)
-	{
+	if(listDir(from, MAX_LIST, 0, dirList) < 0) {
 		err_print("Unable to list directory.");
 		goto err;
 	}
@@ -350,11 +327,11 @@ int main(int argc, char **argv)
 	 */
 	aptSetSleepAllowed(false);
 
-	while(aptMainLoop())
-	{
-		u32			kDown;
-		u32			kHeld;
-		static u64	mill = 0;
+	while (aptMainLoop()) {
+		u32 kDown;
+		u32 kHeld;
+		static u64 mill = 0;
+		bool repeatKey;
 
 		gfxFlushBuffers();
 		gspWaitForVBlank();
@@ -366,184 +343,157 @@ int main(int argc, char **argv)
 
 		consoleSelect(&bottomScreen);
 
-		/* Exit ctrmus */
-		if(kDown & KEY_START)
+		if(kDown & KEY_START) {
+			/* Exit ctrmus */
 			break;
+		}
 
 #ifdef DEBUG
 		consoleSelect(&topScreenLog);
 		printf("\rNum: %d, Max: %d, from: %d   ", fileNum, fileMax, from);
 		consoleSelect(&bottomScreen);
 #endif
-		if(kDown)
+
+		if(kDown) {
 			mill = osGetTime();
+			repeatKey = osGetTime() - mill > 500;
+		}
 
-		if(kHeld & KEY_L)
-		{
+		if (kHeld & KEY_L && kDown & (KEY_R | KEY_UP)) {
 			/* Pause/Play */
-			if(kDown & (KEY_R | KEY_UP))
-			{
-				if(isPlaying() == false)
-					continue;
-
-				consoleSelect(&topScreenLog);
-				if(togglePlayback() == true)
-					puts("Paused");
-				else
-					puts("Playing");
-
+			if (isPlaying() == false) {
 				continue;
 			}
+			consoleSelect(&topScreenLog);
+			if(togglePlayback() == true) {
+				puts("Paused");
+			} else {
+				puts("Playing");
+			}
+			continue;
+		}
 
+		if(kHeld & KEY_L && kDown & KEY_LEFT) {
 			/* Show controls */
-			if(kDown & KEY_LEFT)
-			{
-				consoleSelect(&topScreenLog);
-				showControls();
-				continue;
-			}
+			consoleSelect(&topScreenLog);
+			showControls();
+			continue;
+		}
 
+		if(kHeld & KEY_L && kDown & KEY_B) {
 			/* Stop */
-			if(kDown & KEY_B)
-			{
-				stopPlayback();
+			stopPlayback();
 
-				/* Clear playback information. */
-				consoleSelect(&topScreenInfo);
-				consoleClear();
-				consoleSelect(&topScreenLog);
-				consoleClear();
+			/* Clear playback information. */
+			consoleSelect(&topScreenInfo);
+			consoleClear();
+			consoleSelect(&topScreenLog);
+			consoleClear();
 
-				changeFile(NULL, &playbackInfo);
+			changeFile(NULL, &playbackInfo);
 
-				/* If the playback thread is currently playing, it will now
-				 * stop and tell the Watchdog thread to display "Stopped".
-				 */
-				continue;
-			}
+			/* If the playback thread is currently playing, it will now stop 
+			 * and tell the Watchdog thread to display "Stopped". 
+			 */
+			continue;
 		}
 
-		if((kDown & KEY_UP ||
-					((kHeld & KEY_UP) && (osGetTime() - mill > 500))) &&
-				fileNum > 0)
-		{
+		if (fileNum > 0 && (kDown & KEY_UP || (repeatKey && kHeld & KEY_UP))) {
 			fileNum--;
-
 			/* 26 is the maximum number of entries that can be printed */
-			if(fileMax - fileNum > 26 && from != 0)
+			if (fileMax - fileNum + 2 > MAX_LIST && from > 0) {
 				from--;
-
-			if(listDir(from, MAX_LIST, fileNum, dirList) < 0)
+			}
+			if (listDir(from, MAX_LIST, fileNum, dirList) < 0) {
 				err_print("Unable to list directory.");
+			}
 		}
 
-		if((kDown & KEY_DOWN ||
-					((kHeld & KEY_DOWN) && (osGetTime() - mill > 500))) &&
-				fileNum < fileMax)
-		{
+		if (fileNum > 0 && (kDown & KEY_DOWN || (repeatKey && kHeld & KEY_DOWN))) {
 			fileNum++;
-
-			if(fileNum >= MAX_LIST && fileMax - fileNum >= 0 &&
-					from < fileMax - MAX_LIST)
+			if (
+				fileNum >= MAX_LIST 
+				&& fileMax - fileNum >= 0 
+				&& from < fileMax - MAX_LIST
+			) {
 				from++;
-
-			if(listDir(from, MAX_LIST, fileNum, dirList) < 0)
+			}
+			if (listDir(from, MAX_LIST, fileNum, dirList) < 0) {
 				err_print("Unable to list directory.");
+			}
 		}
 
-		if((kDown & KEY_LEFT ||
-					((kHeld & KEY_LEFT) && (osGetTime() - mill > 500))) &&
-				fileNum > 0)
-		{
+		if (fileNum > 0 && (kDown & KEY_LEFT || (repeatKey && kHeld & KEY_LEFT))) {
 			int skip = MAX_LIST / 2;
-
-			if(fileNum < skip)
+			if (fileNum < skip) {
 				skip = fileNum;
-
-			fileNum -= skip;
-
-			/* 26 is the maximum number of entries that can be printed */
-			/* TODO: Not using MAX_LIST here? */
-			if(fileMax - fileNum > 26 && from != 0)
-			{
-				from -= skip;
-				if(from < 0)
-					from = 0;
 			}
-
-			if(listDir(from, MAX_LIST, fileNum, dirList) < 0)
+			fileNum -= skip;
+			/* 26 is the maximum number of entries that can be printed */
+			if (fileMax - fileNum + 2 > MAX_LIST && from != 0) {
+				from -= skip;
+				if(from < 0) {
+					from = 0;
+				}
+			}
+			if (listDir(from, MAX_LIST, fileNum, dirList) < 0) {
 				err_print("Unable to list directory.");
+			}
 		}
 
-		if((kDown & KEY_RIGHT ||
-					((kHeld & KEY_RIGHT) && (osGetTime() - mill > 500))) &&
-				fileNum < fileMax)
-		{
+		if (fileNum < fileMax && (kDown & KEY_RIGHT || (repeatKey && kHeld & KEY_RIGHT))) {
 			int skip = fileMax - fileNum;
-
-			if(skip > MAX_LIST / 2)
+			if (skip > MAX_LIST / 2) {
 				skip = MAX_LIST / 2;
-
-			fileNum += skip;
-
-			if(fileNum >= MAX_LIST && fileMax - fileNum >= 0 &&
-					from < fileMax - MAX_LIST)
-			{
-				from += skip;
-				if(from > fileMax - MAX_LIST)
-					from = fileMax - MAX_LIST;
 			}
-
-			if(listDir(from, MAX_LIST, fileNum, dirList) < 0)
+			fileNum += skip;
+			if (fileNum >= MAX_LIST && fileMax - fileNum >= 0 && from < fileMax - MAX_LIST) {
+				from += skip;
+				if(from > fileMax - MAX_LIST) {
+					from = fileMax - MAX_LIST;
+				}
+			}
+			if (listDir(from, MAX_LIST, fileNum, dirList) < 0) {
 				err_print("Unable to list directory.");
+			}
 		}
 
 		/*
 		 * Pressing B goes up a folder, as well as pressing A or R when ".."
 		 * is selected.
 		 */
-		if((kDown & KEY_B) ||
-				((kDown & KEY_A) && (from == 0 && fileNum == 0)))
-		{
+		if (kDown & KEY_B || (kDown & KEY_A && from == 0 && fileNum == 0)) {
 			chdir("..");
 			consoleClear();
 			fileMax = getDir(&dirList);
-
 			fileNum = 0;
 			from = 0;
-
-			if(listDir(from, MAX_LIST, fileNum, dirList) < 0)
+			if (listDir(from, MAX_LIST, fileNum, dirList) < 0) {
 				err_print("Unable to list directory.");
-
+			}
 			continue;
 		}
 
-		if(kDown & KEY_A)
-		{
-			if(dirList.dirNum >= fileNum)
-			{
-				chdir(dirList.directories[fileNum - 1]);
-				consoleClear();
-				fileMax = getDir(&dirList);
-				fileNum = 0;
-				from = 0;
-
-				if(listDir(from, MAX_LIST, fileNum, dirList) < 0)
-					err_print("Unable to list directory.");
-				continue;
+		if (kDown & KEY_A && dirList.dirNum >= fileNum) {
+			chdir(dirList.directories[fileNum - 1]);
+			consoleClear();
+			fileMax = getDir(&dirList);
+			fileNum = 0;
+			from = 0;
+			if(listDir(from, MAX_LIST, fileNum, dirList) < 0) {
+				err_print("Unable to list directory.");
 			}
+			continue;
+		}
 
-			if(dirList.dirNum < fileNum)
-			{
-				consoleSelect(&topScreenInfo);
-				consoleClear();
-				consoleSelect(&topScreenLog);
-				consoleClear();
-
-				changeFile(dirList.files[fileNum - dirList.dirNum - 1], &playbackInfo);
-				error = 0;
-				continue;
-			}
+		if (kDown & KEY_A && dirList.dirNum < fileNum) {
+			consoleSelect(&topScreenInfo);
+			consoleClear();
+			consoleSelect(&topScreenLog);
+			consoleClear();
+			changeFile(dirList.files[fileNum - dirList.dirNum - 1], &playbackInfo);
+			error = ERR_NONE;
+			continue;
 		}
 
 		if (kDown & KEY_ZR && fileNum < fileMax) {
@@ -553,7 +503,7 @@ int main(int argc, char **argv)
 			consoleSelect(&topScreenLog);
 			consoleClear();
 			changeFile(dirList.files[fileNum - dirList.dirNum - 1], &playbackInfo);
-			error = 0;
+			error = ERR_NONE;
 			consoleSelect(&bottomScreen);
 			if(listDir(from, MAX_LIST, fileNum, dirList) < 0) err_print("Unable to list directory.");
 			continue;
@@ -566,16 +516,16 @@ int main(int argc, char **argv)
 			consoleSelect(&topScreenLog);
 			consoleClear();
 			changeFile(dirList.files[fileNum - dirList.dirNum - 1], &playbackInfo);
-			error = 0;
+			error = ERR_NONE;
 			consoleSelect(&bottomScreen);
 			if(listDir(from, MAX_LIST, fileNum, dirList) < 0) err_print("Unable to list directory.");
 			continue;
 		}
 
 		// play next song automatically
-		if (error == -1) {
+		if (error == ERR_STOPPED) {
 			if (fileNum >= fileMax) {
-				error = 0;
+				error = ERR_NONE;
 				continue;
 			}
 			fileNum += 1;
@@ -584,51 +534,36 @@ int main(int argc, char **argv)
 			consoleSelect(&topScreenLog);
 			consoleClear();
 			changeFile(dirList.files[fileNum - dirList.dirNum - 1], &playbackInfo);
-			error = 0;
+			error = ERR_NONE;
 			consoleSelect(&bottomScreen);
 			if(listDir(from, MAX_LIST, fileNum, dirList) < 0) err_print("Unable to list directory.");
 			continue;
 		}
 
 		/* After 1000ms, update playback time. */
-		while(osGetTime() - mill > 1000)
-		{
+		if (osGetTime() - mill > 1000) {
+			unsigned hr, min, sec;
+			size_t seconds_played;
+			size_t seconds_total;
+	
 			consoleSelect(&topScreenInfo);
 			/* Reset cursor position and print status. */
 			printf("\033[0;0H");
 
 			/* Avoid divide by zero. */
-			if(playbackInfo.samples_per_second == 0)
-				break;
+			if (playbackInfo.samples_per_second == 0) break;
+			seconds_played = playbackInfo.samples_played / playbackInfo.samples_per_second;
+			hr = (seconds_played/3600); 
+			min = (seconds_played - (3600*hr))/60;
+			sec = (seconds_played -(3600*hr)-(min*60));
+			printf("%02d:%02d:%02d", hr, min, sec);
 
-			{
-				unsigned hr, min, sec;
-				size_t seconds_played;
-
-				seconds_played = playbackInfo.samples_played / playbackInfo.samples_per_second; 
-
-				hr = (seconds_played/3600); 
-				min = (seconds_played - (3600*hr))/60;
-				sec = (seconds_played -(3600*hr)-(min*60));
-
-				printf("%02d:%02d:%02d", hr, min, sec);
-			}
-
-			if(playbackInfo.samples_total != 0)
-			{
-				unsigned hr, min, sec;
-				size_t seconds_total;
-
-				seconds_total = playbackInfo.samples_total / playbackInfo.samples_per_second; 
-
-				hr = (seconds_total/3600); 
-				min = (seconds_total - (3600*hr))/60;
-				sec = (seconds_total -(3600*hr)-(min*60));
-
-				printf(" %02d:%02d:%02d", hr, min, sec);
-			}
-
-			break;
+			if (playbackInfo.samples_total == 0) break;
+			seconds_total = playbackInfo.samples_total / playbackInfo.samples_per_second;
+			hr = (seconds_total/3600); 
+			min = (seconds_total - (3600*hr))/60;
+			sec = (seconds_total -(3600*hr)-(min*60));
+			printf(" %02d:%02d:%02d", hr, min, sec);
 		}
 	}
 
@@ -637,24 +572,16 @@ out:
 	runThreads = false;
 	svcSignalEvent(playbackFailEvent);
 	changeFile(NULL, &playbackInfo);
-
 	gfxExit();
 	return 0;
 
 err:
 	puts("A fatal error occurred. Press START to exit.");
-
-	while(true)
-	{
+	while(true) {
 		u32 kDown;
-
 		hidScanInput();
 		kDown = hidKeysDown();
-
-		if(kDown & KEY_START)
-			break;
+		if (kDown & KEY_START) break;
 	}
-
 	goto out;
 }
-
